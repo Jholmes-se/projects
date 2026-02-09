@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import './Calendar.css'
 
 const STORAGE_KEY = 'calendar-events'
@@ -71,6 +71,8 @@ const Calendar = () => {
   const [endTime, setEndTime] = useState('10:00')
   const [selectedCategory, setSelectedCategory] = useState<EventCategory>('personal')
 
+  const isInitialMount = useRef(true)
+
   // Load events from localStorage on mount
   useEffect(() => {
     try {
@@ -84,14 +86,44 @@ const Calendar = () => {
     }
   }, [])
 
-  // Save events to localStorage whenever they change
+  // Save events to localStorage whenever they change (skip initial mount)
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(events))
     } catch (error) {
       console.error('Error saving events to localStorage:', error)
     }
   }, [events])
+
+  const resetForm = useCallback(() => {
+    setEventTitle('')
+    setEventDescription('')
+    setIsAllDay(true)
+    setStartTime('09:00')
+    setEndTime('10:00')
+    setSelectedCategory('personal')
+    setEditingEvent(null)
+  }, [])
+
+  // Close modals on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showEventDetail) {
+          setShowEventDetail(false)
+        } else if (showModal) {
+          setShowModal(false)
+          resetForm()
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [showModal, showEventDetail, resetForm])
 
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -101,13 +133,13 @@ const Calendar = () => {
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
 
-  const generateCalendarDays = (): DayCell[] => {
+  const calendarDays = useMemo((): DayCell[] => {
     const firstDay = new Date(year, month, 1).getDay()
     const daysInMonth = new Date(year, month + 1, 0).getDate()
     const daysInPrevMonth = new Date(year, month, 0).getDate()
 
     const today = new Date()
-    const isCurrentMonth = today.getMonth() === month && today.getFullYear() === year
+    const isCurrent = today.getMonth() === month && today.getFullYear() === year
 
     const days: DayCell[] = []
 
@@ -125,7 +157,7 @@ const Calendar = () => {
       days.push({
         day,
         isCurrentMonth: true,
-        isToday: isCurrentMonth && day === today.getDate()
+        isToday: isCurrent && day === today.getDate()
       })
     }
 
@@ -141,7 +173,7 @@ const Calendar = () => {
     }
 
     return days
-  }
+  }, [year, month])
 
   const handlePrevMonth = () => {
     setCurrentDate(new Date(year, month - 1, 1))
@@ -149,6 +181,10 @@ const Calendar = () => {
 
   const handleNextMonth = () => {
     setCurrentDate(new Date(year, month + 1, 1))
+  }
+
+  const handleToday = () => {
+    setCurrentDate(new Date())
   }
 
   const formatDate = (date: Date): string => {
@@ -174,9 +210,12 @@ const Calendar = () => {
     setShowModal(true)
   }
 
+  const hasTimeError = !isAllDay && startTime && endTime && endTime <= startTime
+
   const handleAddEvent = (e: React.FormEvent) => {
     e.preventDefault()
     if (!eventTitle.trim()) return
+    if (hasTimeError) return
 
     if (editingEvent) {
       // Update existing event
@@ -200,7 +239,7 @@ const Calendar = () => {
       if (!selectedDate) return
 
       const newEvent: Event = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         date: formatDate(selectedDate),
         title: eventTitle.trim(),
         description: eventDescription.trim(),
@@ -213,12 +252,7 @@ const Calendar = () => {
       setEvents([...events, newEvent])
     }
 
-    setEventTitle('')
-    setEventDescription('')
-    setIsAllDay(true)
-    setStartTime('09:00')
-    setEndTime('10:00')
-    setSelectedCategory('personal')
+    resetForm()
     setShowModal(false)
     setShowEventDetail(false)
   }
@@ -254,14 +288,15 @@ const Calendar = () => {
     return events.filter(event => event.date === dateStr)
   }
 
-  const days = generateCalendarDays()
-
   return (
     <div className="calendar-container">
       <div className="calendar-header">
-        <button onClick={handlePrevMonth}>&lt;</button>
+        <div className="header-nav">
+          <button onClick={handlePrevMonth}>&lt;</button>
+          <button className="today-button" onClick={handleToday}>Today</button>
+          <button onClick={handleNextMonth}>&gt;</button>
+        </div>
         <h1>{monthNames[month]} {year}</h1>
-        <button onClick={handleNextMonth}>&gt;</button>
       </div>
       <div className="calendar-grid">
         <div className="day-name">Sun</div>
@@ -271,7 +306,7 @@ const Calendar = () => {
         <div className="day-name">Thu</div>
         <div className="day-name">Fri</div>
         <div className="day-name">Sat</div>
-        {days.map((dayCell, index) => {
+        {calendarDays.map((dayCell, index) => {
           const dayEvents = getEventsForDay(dayCell.day, dayCell.isCurrentMonth)
           return (
             <div
@@ -309,13 +344,7 @@ const Calendar = () => {
       {showModal && (
         <div className="modal-overlay" onClick={() => {
           setShowModal(false)
-          setEditingEvent(null)
-          setEventTitle('')
-          setEventDescription('')
-          setIsAllDay(true)
-          setStartTime('09:00')
-          setEndTime('10:00')
-          setSelectedCategory('personal')
+          resetForm()
         }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{editingEvent ? 'Edit Event' : 'Add Event'}</h2>
@@ -370,36 +399,35 @@ const Calendar = () => {
                 </label>
               </div>
               {!isAllDay && (
-                <div className="time-inputs">
-                  <div className="time-input-group">
-                    <label>Start time</label>
-                    <input
-                      type="time"
-                      value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)}
-                    />
+                <>
+                  <div className="time-inputs">
+                    <div className="time-input-group">
+                      <label>Start time</label>
+                      <input
+                        type="time"
+                        value={startTime}
+                        onChange={(e) => setStartTime(e.target.value)}
+                      />
+                    </div>
+                    <div className="time-input-group">
+                      <label>End time</label>
+                      <input
+                        type="time"
+                        value={endTime}
+                        onChange={(e) => setEndTime(e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="time-input-group">
-                    <label>End time</label>
-                    <input
-                      type="time"
-                      value={endTime}
-                      onChange={(e) => setEndTime(e.target.value)}
-                    />
-                  </div>
-                </div>
+                  {hasTimeError && (
+                    <p className="time-error">End time must be after start time</p>
+                  )}
+                </>
               )}
               <div className="modal-buttons">
-                <button type="submit">{editingEvent ? 'Save Changes' : 'Add Event'}</button>
+                <button type="submit" disabled={!!hasTimeError}>{editingEvent ? 'Save Changes' : 'Add Event'}</button>
                 <button type="button" onClick={() => {
                   setShowModal(false)
-                  setEditingEvent(null)
-                  setEventTitle('')
-                  setEventDescription('')
-                  setIsAllDay(true)
-                  setStartTime('09:00')
-                  setEndTime('10:00')
-                  setSelectedCategory('personal')
+                  resetForm()
                 }}>
                   Cancel
                 </button>
